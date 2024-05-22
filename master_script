@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+import os
+import json
+
+def get_program_info():
+    program = input("Enter the *arr program (e.g., Sonarr, Radarr, Lidarr, Readarr, Prowlarr): ").strip().lower()
+    hostname = input(f"Enter the hostname/IP for {program}: ").strip()
+    api_key = input(f"Enter the API key for {program}: ").strip()
+    return {
+        "program": program,
+        "hostname": hostname,
+        "api_key": api_key
+    }
+
+def generate_script(programs):
+    script_content = f"""#!/usr/bin/env python3
+import os
+import asyncio
+import logging
+import requests
+from requests.exceptions import RequestException
+import json
+
+# Set up logging
+logging.basicConfig(
+    format='%(asctime)s [%(levelname)s]: %(message)s',
+    level=logging.INFO,
+    handlers=[logging.StreamHandler()]
+)
+
+# API timeout for API requests in seconds
+API_TIMEOUT = int(os.environ.get('API_TIMEOUT', 600))  # 10 minutes
+
+"""
+
+    for program in programs:
+        prog_upper = program['program'].upper()
+        script_content += f"""# {program['program'].capitalize()} API endpoint
+{prog_upper}_API_URL = "{program['hostname']}/api/v3"
+{prog_upper}_API_KEY = "{program['api_key']}"
+
+"""
+
+    script_content += """
+# Function to make API requests with error handling
+async def make_api_request(url, api_key, params=None):
+    try:
+        headers = {'X-Api-Key': api_key}
+        response = await asyncio.get_event_loop().run_in_executor(None, lambda: requests.get(url, params=params, headers=headers))
+        response.raise_for_status()
+        return response.json()
+    except RequestException as e:
+        logging.error(f'Error making API request to {url}: {e}')
+        return None
+    except ValueError as e:
+        logging.error(f'Error parsing JSON response from {url}: {e}')
+        return None
+
+# Function to make API delete with error handling
+async def make_api_delete(url, api_key, params=None):
+    try:
+        headers = {'X-Api-Key': api_key}
+        response = await asyncio.get_event_loop().run_in_executor(None, lambda: requests.delete(url, params=params, headers=headers))
+        response.raise_for_status()
+        return response.json()
+    except RequestException as e:
+        logging.error(f'Error making API request to {url}: {e}')
+        return None
+    except ValueError as e:
+        logging.error(f'Error parsing JSON response from {url}: {e}')
+        return None
+
+"""
+
+    for program in programs:
+        prog_upper = program['program'].upper()
+        script_content += f"""
+# Function to remove stalled {program['program'].capitalize()} downloads
+async def remove_stalled_{program['program']}_downloads():
+    logging.info('Checking {program['program'].capitalize()} queue...')
+    {program['program']}_url = f'{{{prog_upper}_API_URL}}/queue'
+    {program['program']}_queue = await make_api_request({program['program']}_url, {prog_upper}_API_KEY, {{'page': '1', 'pageSize': await count_records({prog_upper}_API_URL, {prog_upper}_API_KEY)}})
+    if {program['program']}_queue is not None and 'records' in {program['program']}_queue:
+        logging.info('Processing {program['program'].capitalize()} queue...')
+        for item in {program['program']}_queue['records']:
+            if 'title' in item and 'status' in item and 'trackedDownloadStatus' in item:
+                logging.info(f'Checking the status of {{item["title"]}}')
+                if item['status'] == 'warning' and item['errorMessage'] == 'The download is stalled with no connections':
+                    logging.info(f'Removing stalled {program['program'].capitalize()} download: {{item["title"]}}')
+                    await make_api_delete(f'{{{prog_upper}_API_URL}}/queue/{{item["id"]}}', {prog_upper}_API_KEY, {{'removeFromClient': 'true', 'blocklist': 'true'}})
+                else:
+                    logging.warning('Skipping item in {program['program'].capitalize()} queue due to missing or invalid keys')
+    else:
+        logging.warning('{program['program'].capitalize()} queue is None or missing "records" key')
+
+"""
+
+    script_content += """
+# Make a request to view and count items in queue and return the number.
+async def count_records(API_URL, API_Key):
+    the_url = f'{API_URL}/queue'
+    the_queue = await make_api_request(the_url, API_Key)
+    if the_queue is not None and 'records' in the_queue:
+        return the_queue['totalRecords']
+
+# Main function
+async def main():
+    while True:
+"""
+
+    for program in programs:
+        script_content += f"        await remove_stalled_{program['program']}_downloads()\n"
+
+    script_content += """
+        logging.info('Finished running media-tools script. Sleeping for 10 minutes.')
+        await asyncio.sleep(API_TIMEOUT)
+
+if __name__ == '__main__':
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
+"""
+
+    with open("queue_cleaner.py", "w") as script_file:
+        script_file.write(script_content)
+    print("Generated queue_cleaner.py script")
+
+def main():
+    programs = []
+    while True:
+        programs.append(get_program_info())
+        add_more = input("Would you like to add another *arr program to the script? (yes/no): ").strip().lower()
+        if add_more != 'yes':
+            break
+    generate_script(programs)
+
+if __name__ == "__main__":
+    main()
