@@ -1,0 +1,14 @@
+[Unit]
+Description=Stalled Cleaner Service
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/home/$USER/scripts/
+ExecStart=/usr/bin/python3 /home/$USER/scripts/media_cleanup.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
