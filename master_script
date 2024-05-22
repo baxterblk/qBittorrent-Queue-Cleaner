@@ -3,7 +3,7 @@ import os
 import json
 
 def get_program_info():
-    program = input("Enter the *arr program (e.g., Sonarr, Radarr, Lidarr, Readarr, Prowlarr): ").strip().lower()
+    program = input("Enter the *arr program (e.g., Sonarr, Radarr, Lidarr, Readarr, Prowlarr, Whisparr): ").strip().lower()
     hostname = input(f"Enter the hostname/IP for {program}: ").strip()
     api_key = input(f"Enter the API key for {program}: ").strip()
     return {
@@ -36,7 +36,7 @@ API_TIMEOUT = int(os.environ.get('API_TIMEOUT', 600))  # 10 minutes
     for program in programs:
         prog_upper = program['program'].upper()
         script_content += f"""# {program['program'].capitalize()} API endpoint
-{prog_upper}_API_URL = "{program['hostname']}/api/v3"
+{prog_upper}_API_URL = "{program['hostname']}/api/v1"
 {prog_upper}_API_KEY = "{program['api_key']}"
 
 """
