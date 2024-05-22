@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=YOUR_USERNAME
 WorkingDirectory=/home/$USER/scripts/
-ExecStart=/usr/bin/python3 /home/$USER/scripts/media_cleanup.py
+ExecStart=/usr/bin/python3 /home/$USER/scripts/$SCRIPT_NAME
 Restart=on-failure
 RestartSec=10
 
