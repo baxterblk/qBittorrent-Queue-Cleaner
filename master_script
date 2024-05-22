@@ -124,6 +124,29 @@ if __name__ == '__main__':
         script_file.write(script_content)
     print("Generated queue_cleaner.py script")
 
+def generate_service(username, script_path):
+    service_content = f"""[Unit]
+Description=Stalled Cleaner Service
+After=network.target
+
+[Service]
+Type=simple
+User={username}
+WorkingDirectory={script_path}
+ExecStart=/usr/bin/python3 {script_path}/queue_cleaner.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+"""
+    service_path = "/etc/systemd/system/stalled_cleaner.service"
+    with open(service_path, "w") as service_file:
+        service_file.write(service_content)
+    os.system("systemctl daemon-reload")
+    os.system("systemctl enable stalled_cleaner.service")
+    print(f"Service created and enabled at {service_path}")
+
 def main():
     programs = []
     while True:
@@ -132,6 +155,12 @@ def main():
         if add_more != 'yes':
             break
     generate_script(programs)
+    
+    create_service = input("Would you like to add and enable this script as a service? (yes/no): ").strip().lower()
+    if create_service == 'yes':
+        username = input("Enter the username for the service: ").strip()
+        script_path = os.path.abspath(os.path.dirname(__file__))
+        generate_service(username, script_path)
 
 if __name__ == "__main__":
     main()
