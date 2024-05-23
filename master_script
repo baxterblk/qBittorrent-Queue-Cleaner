@@ -8,9 +8,12 @@ import asyncio
 import argparse
 import subprocess
 import sys
+from packaging import version
+from tqdm import tqdm
 
-# Required dependencies
-required_dependencies = ["python3", "python3-pip", "requests"]
+# Required dependencies and their minimum versions
+required_system_dependencies = {"python3": "3.6", "pip3": "20.0"}
+required_python_packages = {"requests": "2.22.0"}
 
 # Set up logging
 logging.basicConfig(
@@ -19,40 +22,70 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 
-def check_dependencies():
+def check_system_dependencies():
     missing_dependencies = []
-    for dep in required_dependencies:
+    for dep, min_version in required_system_dependencies.items():
         result = subprocess.run(["which", dep], capture_output=True, text=True)
         if result.returncode != 0:
             missing_dependencies.append(dep)
+        else:
+            version_result = subprocess.run([dep, "--version"], capture_output=True, text=True)
+            installed_version = version_result.stdout.split()[-1]
+            if version.parse(installed_version) < version.parse(min_version):
+                missing_dependencies.append(dep)
     return missing_dependencies
 
-def install_dependencies(missing_dependencies):
-    if os.path.exists("/usr/bin/apt-get"):
-        package_manager = "apt-get"
-    elif os.path.exists("/usr/bin/yum"):
-        package_manager = "yum"
-    elif os.path.exists("/usr/bin/dnf"):
-        package_manager = "dnf"
-    elif os.path.exists("/usr/bin/pacman"):
-        package_manager = "pacman"
-    else:
+def check_python_packages():
+    missing_packages = []
+    for package, min_version in required_python_packages.items():
+        try:
+            pkg = __import__(package)
+            installed_version = pkg.__version__
+            if version.parse(installed_version) < version.parse(min_version):
+                missing_packages.append(package)
+        except ImportError:
+            missing_packages.append(package)
+    return missing_packages
+
+def install_system_dependencies(missing_dependencies):
+    package_managers = {
+        "apt-get": "sudo apt-get install -y",
+        "yum": "sudo yum install -y",
+        "dnf": "sudo dnf install -y",
+        "pacman": "sudo pacman -S --noconfirm",
+        "brew": "brew install"
+    }
+
+    detected_package_manager = None
+    for pm in package_managers.keys():
+        if subprocess.run(["which", pm], capture_output=True, text=True).returncode == 0:
+            detected_package_manager = pm
+            break
+
+    if not detected_package_manager:
         logging.error("Unsupported package manager. Please install the required dependencies manually.")
         return False
     
-    install_command = {
-        "apt-get": f"sudo apt-get install -y {' '.join(missing_dependencies)}",
-        "yum": f"sudo yum install -y {' '.join(missing_dependencies)}",
-        "dnf": f"sudo dnf install -y {' '.join(missing_dependencies)}",
-        "pacman": f"sudo pacman -S --noconfirm {' '.join(missing_dependencies)}",
-    }
-
+    install_command = f"{package_managers[detected_package_manager]} {' '.join(missing_dependencies)}"
     try:
-        subprocess.run(install_command[package_manager], shell=True, check=True)
-        logging.info("Dependencies installed successfully.")
+        with tqdm(total=100, desc="Installing system dependencies") as pbar:
+            subprocess.run(install_command, shell=True, check=True)
+            pbar.update(100)
+        logging.info("System dependencies installed successfully.")
         return True
     except subprocess.CalledProcessError as e:
-        logging.error(f"Failed to install dependencies: {e}")
+        logging.error(f"Failed to install system dependencies: {e}")
+        return False
+
+def install_python_packages(missing_packages):
+    try:
+        with tqdm(total=100, desc="Installing Python packages") as pbar:
+            subprocess.run([sys.executable, "-m", "pip", "install", *missing_packages], check=True)
+            pbar.update(100)
+        logging.info("Python packages installed successfully.")
+        return True
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to install Python packages: {e}")
         return False
 
 # Function to make API requests with error handling and retries
@@ -118,17 +151,24 @@ async def remove_stalled_downloads(api_url, api_key, program):
 
 # Function to get program information from the user
 def get_program_info():
-    program = input("Enter the *arr program (e.g., Sonarr, Radarr, Lidarr, Readarr, Prowlarr, Whisparr): ").strip().lower()
-    hostname = input(f"Enter the hostname/IP for {program}: ").strip()
-    api_key = input(f"Enter the API key for {program}: ").strip()
-    return {
-        "program": program,
-        "hostname": hostname,
-        "api_key": api_key
-    }
+    while True:
+        program = input("Enter the *arr program (e.g., Sonarr, Radarr, Lidarr, Readarr, Prowlarr, Whisparr): ").strip().lower()
+        if program not in ['sonarr', 'radarr', 'lidarr', 'readarr', 'prowlarr', 'whisparr']:
+            print("Invalid program name. Please try again.")
+            continue
+        hostname = input(f"Enter the hostname/IP for {program}: ").strip()
+        api_key = input(f"Enter the API key for {program}: ").strip()
+        if not hostname or not api_key:
+            print("Hostname and API key cannot be empty. Please try again.")
+            continue
+        return {
+            "program": program,
+            "hostname": hostname,
+            "api_key": api_key
+        }
 
 # Function to generate the cleaner script
-def generate_script(programs):
+def generate_script(programs, api_timeout):
     script_content = f"""#!/usr/bin/env python3
 import os
 import asyncio
@@ -145,7 +185,7 @@ logging.basicConfig(
 )
 
 # API timeout for API requests in seconds
-API_TIMEOUT = int(os.environ.get('API_TIMEOUT', 600))  # 10 minutes
+API_TIMEOUT = {api_timeout}
 
 """
 
@@ -320,13 +360,22 @@ def main():
     parser.add_argument('--api_timeout', type=int, default=600, help='API timeout in seconds (default: 600)')
     args = parser.parse_args()
 
-    missing_dependencies = check_dependencies()
-    if missing_dependencies:
-        print(f"Missing dependencies: {', '.join(missing_dependencies)}")
+    missing_system_dependencies = check_system_dependencies()
+    missing_python_packages = check_python_packages()
+
+    if missing_system_dependencies or missing_python_packages:
+        if missing_system_dependencies:
+            print(f"Missing system dependencies: {', '.join(missing_system_dependencies)}")
+        if missing_python_packages:
+            print(f"Missing Python packages: {', '.join(missing_python_packages)}")
+        
         install_deps = input("Do you want to install the missing dependencies? (yes/no): ").strip().lower()
         if install_deps == 'yes':
-            if not install_dependencies(missing_dependencies):
-                print("Failed to install dependencies. Exiting.")
+            if missing_system_dependencies and not install_system_dependencies(missing_system_dependencies):
+                print("Failed to install system dependencies. Exiting.")
+                sys.exit(1)
+            if missing_python_packages and not install_python_packages(missing_python_packages):
+                print("Failed to install Python packages. Exiting.")
                 sys.exit(1)
         else:
             print("Missing dependencies not installed. Exiting.")
@@ -338,7 +387,8 @@ def main():
         add_more = input("Would you like to add another *arr program to the script? (yes/no): ").strip().lower()
         if add_more != 'yes':
             break
-    generate_script(programs)
+    api_timeout = int(input("Enter the API timeout in seconds (default is 600): ").strip() or 600)
+    generate_script(programs, api_timeout)
     
     create_service = input("Would you like to add and enable this script as a service? (yes/no): ").strip().lower()
     if create_service == 'yes':
