@@ -6,6 +6,11 @@ import requests
 from requests.exceptions import RequestException
 import asyncio
 import argparse
+import subprocess
+import sys
+
+# Required dependencies
+required_dependencies = ["python3", "python3-pip", "requests"]
 
 # Set up logging
 logging.basicConfig(
@@ -13,6 +18,42 @@ logging.basicConfig(
     level=logging.INFO,
     handlers=[logging.StreamHandler()]
 )
+
+def check_dependencies():
+    missing_dependencies = []
+    for dep in required_dependencies:
+        result = subprocess.run(["which", dep], capture_output=True, text=True)
+        if result.returncode != 0:
+            missing_dependencies.append(dep)
+    return missing_dependencies
+
+def install_dependencies(missing_dependencies):
+    if os.path.exists("/usr/bin/apt-get"):
+        package_manager = "apt-get"
+    elif os.path.exists("/usr/bin/yum"):
+        package_manager = "yum"
+    elif os.path.exists("/usr/bin/dnf"):
+        package_manager = "dnf"
+    elif os.path.exists("/usr/bin/pacman"):
+        package_manager = "pacman"
+    else:
+        logging.error("Unsupported package manager. Please install the required dependencies manually.")
+        return False
+    
+    install_command = {
+        "apt-get": f"sudo apt-get install -y {' '.join(missing_dependencies)}",
+        "yum": f"sudo yum install -y {' '.join(missing_dependencies)}",
+        "dnf": f"sudo dnf install -y {' '.join(missing_dependencies)}",
+        "pacman": f"sudo pacman -S --noconfirm {' '.join(missing_dependencies)}",
+    }
+
+    try:
+        subprocess.run(install_command[package_manager], shell=True, check=True)
+        logging.info("Dependencies installed successfully.")
+        return True
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to install dependencies: {e}")
+        return False
 
 # Function to make API requests with error handling and retries
 async def make_api_request(url, api_key, params=None, retries=3):
@@ -278,6 +319,18 @@ def main():
     parser = argparse.ArgumentParser(description="Generate a queue cleaner script for *arr programs.")
     parser.add_argument('--api_timeout', type=int, default=600, help='API timeout in seconds (default: 600)')
     args = parser.parse_args()
+
+    missing_dependencies = check_dependencies()
+    if missing_dependencies:
+        print(f"Missing dependencies: {', '.join(missing_dependencies)}")
+        install_deps = input("Do you want to install the missing dependencies? (yes/no): ").strip().lower()
+        if install_deps == 'yes':
+            if not install_dependencies(missing_dependencies):
+                print("Failed to install dependencies. Exiting.")
+                sys.exit(1)
+        else:
+            print("Missing dependencies not installed. Exiting.")
+            sys.exit(1)
 
     programs = []
     while True:
