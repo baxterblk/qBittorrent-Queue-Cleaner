@@ -1,7 +1,81 @@
 #!/usr/bin/env python3
 import os
 import json
+import logging
+import requests
+from requests.exceptions import RequestException
+import asyncio
+import argparse
 
+# Set up logging
+logging.basicConfig(
+    format='%(asctime)s [%(levelname)s]: %(message)s',
+    level=logging.INFO,
+    handlers=[logging.StreamHandler()]
+)
+
+# Function to make API requests with error handling and retries
+async def make_api_request(url, api_key, params=None, retries=3):
+    headers = {'X-Api-Key': api_key}
+    for attempt in range(retries):
+        try:
+            response = await asyncio.get_event_loop().run_in_executor(None, lambda: requests.get(url, params=params, headers=headers))
+            response.raise_for_status()
+            return response.json()
+        except RequestException as e:
+            logging.error(f'Error making API request to {url}: {e}. Attempt {attempt + 1} of {retries}')
+            await asyncio.sleep(2 ** attempt)  # Exponential backoff
+    return None
+
+# Function to make API delete with error handling and retries
+async def make_api_delete(url, api_key, params=None, retries=3):
+    headers = {'X-Api-Key': api_key}
+    for attempt in range(retries):
+        try:
+            response = await asyncio.get_event_loop().run_in_executor(None, lambda: requests.delete(url, params=params, headers=headers))
+            response.raise_for_status()
+            return response.json()
+        except RequestException as e:
+            logging.error(f'Error making API delete request to {url}: {e}. Attempt {attempt + 1} of {retries}')
+            await asyncio.sleep(2 ** attempt)  # Exponential backoff
+    return None
+
+# Function to get total records for pagination
+async def count_records(api_url, api_key):
+    the_url = f'{api_url}/queue'
+    the_queue = await make_api_request(the_url, api_key)
+    if the_queue is not None and 'records' in the_queue:
+        return the_queue['totalRecords']
+    return 0
+
+# Function to remove stalled downloads with pagination
+async def remove_stalled_downloads(api_url, api_key, program):
+    logging.info(f'Checking {program.capitalize()} queue...')
+    page_size = 100  # Fetch 100 records per page
+
+    # Get total number of records
+    total_records = await count_records(api_url, api_key)
+    if total_records == 0:
+        logging.warning(f'{program.capitalize()} queue is empty or unavailable.')
+        return
+
+    for page in range(1, (total_records // page_size) + 2):
+        queue_url = f'{api_url}/queue'
+        queue = await make_api_request(queue_url, api_key, {'page': page, 'pageSize': page_size})
+
+        if queue is not None and 'records' in queue:
+            for item in queue['records']:
+                if 'title' in item and 'status' in item and 'trackedDownloadStatus' in item:
+                    logging.info(f'Checking the status of {item["title"]}')
+                    if item['status'] == 'warning' and item['errorMessage'] == 'The download is stalled with no connections':
+                        logging.info(f'Removing stalled {program.capitalize()} download: {item["title"]}')
+                        await make_api_delete(f'{api_url}/queue/{item["id"]}', api_key, {'removeFromClient': 'true', 'blocklist': 'true'})
+                    else:
+                        logging.warning(f'Skipping item in {program.capitalize()} queue due to missing or invalid keys')
+        else:
+            logging.warning(f'{program.capitalize()} queue is None or missing "records" key')
+
+# Function to get program information from the user
 def get_program_info():
     program = input("Enter the *arr program (e.g., Sonarr, Radarr, Lidarr, Readarr, Prowlarr, Whisparr): ").strip().lower()
     hostname = input(f"Enter the hostname/IP for {program}: ").strip()
@@ -12,6 +86,7 @@ def get_program_info():
         "api_key": api_key
     }
 
+# Function to generate the cleaner script
 def generate_script(programs):
     script_content = f"""#!/usr/bin/env python3
 import os
@@ -42,67 +117,74 @@ API_TIMEOUT = int(os.environ.get('API_TIMEOUT', 600))  # 10 minutes
 """
 
     script_content += """
-# Function to make API requests with error handling
-async def make_api_request(url, api_key, params=None):
-    try:
-        headers = {'X-Api-Key': api_key}
-        response = await asyncio.get_event_loop().run_in_executor(None, lambda: requests.get(url, params=params, headers=headers))
-        response.raise_for_status()
-        return response.json()
-    except RequestException as e:
-        logging.error(f'Error making API request to {url}: {e}')
-        return None
-    except ValueError as e:
-        logging.error(f'Error parsing JSON response from {url}: {e}')
-        return None
+# Function to make API requests with error handling and retries
+async def make_api_request(url, api_key, params=None, retries=3):
+    headers = {'X-Api-Key': api_key}
+    for attempt in range(retries):
+        try:
+            response = await asyncio.get_event_loop().run_in_executor(None, lambda: requests.get(url, params=params, headers=headers))
+            response.raise_for_status()
+            return response.json()
+        except RequestException as e:
+            logging.error(f'Error making API request to {url}: {e}. Attempt {attempt + 1} of {retries}')
+            await asyncio.sleep(2 ** attempt)  # Exponential backoff
+    return None
 
-# Function to make API delete with error handling
-async def make_api_delete(url, api_key, params=None):
-    try:
-        headers = {'X-Api-Key': api_key}
-        response = await asyncio.get_event_loop().run_in_executor(None, lambda: requests.delete(url, params=params, headers=headers))
-        response.raise_for_status()
-        return response.json()
-    except RequestException as e:
-        logging.error(f'Error making API request to {url}: {e}')
-        return None
-    except ValueError as e:
-        logging.error(f'Error parsing JSON response from {url}: {e}')
-        return None
+# Function to make API delete with error handling and retries
+async def make_api_delete(url, api_key, params=None, retries=3):
+    headers = {'X-Api-Key': api_key}
+    for attempt in range(retries):
+        try:
+            response = await asyncio.get_event_loop().run_in_executor(None, lambda: requests.delete(url, params=params, headers=headers))
+            response.raise_for_status()
+            return response.json()
+        except RequestException as e:
+            logging.error(f'Error making API delete request to {url}: {e}. Attempt {attempt + 1} of {retries}')
+            await asyncio.sleep(2 ** attempt)  # Exponential backoff
+    return None
 
+# Function to get total records for pagination
+async def count_records(api_url, api_key):
+    the_url = f'{api_url}/queue'
+    the_queue = await make_api_request(the_url, api_key)
+    if the_queue is not None and 'records' in the_queue:
+        return the_queue['totalRecords']
+    return 0
 """
 
     for program in programs:
         prog_upper = program['program'].upper()
         script_content += f"""
-# Function to remove stalled {program['program'].capitalize()} downloads
+# Function to remove stalled {program['program'].capitalize()} downloads with pagination
 async def remove_stalled_{program['program']}_downloads():
     logging.info('Checking {program['program'].capitalize()} queue...')
-    {program['program']}_url = f'{{{prog_upper}_API_URL}}/queue'
-    {program['program']}_queue = await make_api_request({program['program']}_url, {prog_upper}_API_KEY, {{'page': '1', 'pageSize': await count_records({prog_upper}_API_URL, {prog_upper}_API_KEY)}})
-    if {program['program']}_queue is not None and 'records' in {program['program']}_queue:
-        logging.info('Processing {program['program'].capitalize()} queue...')
-        for item in {program['program']}_queue['records']:
-            if 'title' in item and 'status' in item and 'trackedDownloadStatus' in item:
-                logging.info(f'Checking the status of {{item["title"]}}')
-                if item['status'] == 'warning' and item['errorMessage'] == 'The download is stalled with no connections':
-                    logging.info(f'Removing stalled {program['program'].capitalize()} download: {{item["title"]}}')
-                    await make_api_delete(f'{{{prog_upper}_API_URL}}/queue/{{item["id"]}}', {prog_upper}_API_KEY, {{'removeFromClient': 'true', 'blocklist': 'true'}})
-                else:
-                    logging.warning('Skipping item in {program['program'].capitalize()} queue due to missing or invalid keys')
-    else:
-        logging.warning('{program['program'].capitalize()} queue is None or missing "records" key')
+    page_size = 100  # Fetch 100 records per page
+
+    # Get total number of records
+    total_records = await count_records({prog_upper}_API_URL, {prog_upper}_API_KEY)
+    if total_records == 0:
+        logging.warning('{program['program'].capitalize()} queue is empty or unavailable.')
+        return
+
+    for page in range(1, (total_records // page_size) + 2):
+        queue_url = f'{{{prog_upper}_API_URL}}/queue'
+        queue = await make_api_request(queue_url, {prog_upper}_API_KEY, {{'page': page, 'pageSize': page_size}})
+
+        if queue is not None and 'records' in queue:
+            for item in queue['records']:
+                if 'title' in item and 'status' in item and 'trackedDownloadStatus' in item:
+                    logging.info(f'Checking the status of {{item["title"]}}')
+                    if item['status'] == 'warning' and item['errorMessage'] == 'The download is stalled with no connections':
+                        logging.info(f'Removing stalled {program['program'].capitalize()} download: {{item["title"]}}')
+                        await make_api_delete(f'{{{prog_upper}_API_URL}}/queue/{{item["id"]}}', {prog_upper}_API_KEY, {{'removeFromClient': 'true', 'blocklist': 'true'}})
+                    else:
+                        logging.warning(f'Skipping item in {program['program'].capitalize()} queue due to missing or invalid keys')
+        else:
+            logging.warning('{program['program'].capitalize()} queue is None or missing "records" key')
 
 """
 
     script_content += """
-# Make a request to view and count items in queue and return the number.
-async def count_records(API_URL, API_Key):
-    the_url = f'{API_URL}/queue'
-    the_queue = await make_api_request(the_url, API_Key)
-    if the_queue is not None and 'records' in the_queue:
-        return the_queue['totalRecords']
-
 # Main function
 async def main():
     while True:
@@ -124,7 +206,7 @@ if __name__ == '__main__':
         script_file.write(script_content)
     print("Generated queue_cleaner.py script")
 
-def generate_service(username, script_path):
+def generate_service(username, script_path, interpreter, init_system):
     service_content = f"""[Unit]
 Description=Stalled Cleaner Service
 After=network.target
@@ -133,21 +215,70 @@ After=network.target
 Type=simple
 User={username}
 WorkingDirectory={script_path}
-ExecStart=/usr/bin/python3 {script_path}/queue_cleaner.py
+ExecStart={interpreter} {script_path}/queue_cleaner.py
 Restart=on-failure
 RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
 """
-    service_path = "/etc/systemd/system/stalled_cleaner.service"
-    with open(service_path, "w") as service_file:
-        service_file.write(service_content)
-    os.system("systemctl daemon-reload")
-    os.system("systemctl enable stalled_cleaner.service")
-    print(f"Service created and enabled at {service_path}")
+    try:
+        if init_system == 'systemd':
+            service_path = "/etc/systemd/system/stalled_cleaner.service"
+            with open(service_path, "w") as service_file:
+                service_file.write(service_content)
+            os.system("systemctl daemon-reload")
+            os.system(f"systemctl enable stalled_cleaner.service --now")
+        elif init_system == 'init':
+            service_path = "/etc/init.d/stalled_cleaner"
+            with open(service_path, "w") as service_file:
+                service_file.write(service_content)
+            os.system(f"chmod +x {service_path}")
+            os.system(f"update-rc.d stalled_cleaner defaults")
+            os.system(f"service stalled_cleaner start")
+        elif init_system == 'upstart':
+            service_path = "/etc/init/stalled_cleaner.conf"
+            service_content = f"""description "Stalled Cleaner Service"
+start on filesystem or runlevel [2345]
+stop on runlevel [!2345]
+
+respawn
+exec {interpreter} {script_path}/queue_cleaner.py
+"""
+            with open(service_path, "w") as service_file:
+                service_file.write(service_content)
+            os.system(f"initctl reload-configuration")
+            os.system(f"initctl start stalled_cleaner")
+        else:
+            logging.error("Unsupported init system")
+            return False
+        if os.path.exists(service_path):
+            logging.info(f"Service created and enabled at {service_path}")
+            return True
+        else:
+            logging.error(f"Failed to create service file at {service_path}")
+            return False
+    except Exception as e:
+        logging.error(f"Error creating service: {e}")
+        return False
+
+def select_init_system():
+    init_systems = ['systemd', 'init', 'upstart']
+    print("Select the init system:")
+    for i, init in enumerate(init_systems, 1):
+        print(f"{i}. {init}")
+    choice = int(input("Enter the number of your choice: "))
+    if 1 <= choice <= len(init_systems):
+        return init_systems[choice - 1]
+    else:
+        print("Invalid choice. Please try again.")
+        return select_init_system()
 
 def main():
+    parser = argparse.ArgumentParser(description="Generate a queue cleaner script for *arr programs.")
+    parser.add_argument('--api_timeout', type=int, default=600, help='API timeout in seconds (default: 600)')
+    args = parser.parse_args()
+
     programs = []
     while True:
         programs.append(get_program_info())
@@ -160,7 +291,10 @@ def main():
     if create_service == 'yes':
         username = input("Enter the username for the service: ").strip()
         script_path = os.path.abspath(os.path.dirname(__file__))
-        generate_service(username, script_path)
+        interpreter = input("Enter the full path to the Python interpreter (e.g., /usr/bin/python3): ").strip()
+        init_system = select_init_system()
+        if not generate_service(username, script_path, interpreter, init_system):
+            print("Failed to create the service. Please check the logs for more details.")
 
 if __name__ == "__main__":
     main()
