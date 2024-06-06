@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 # Required dependencies and their minimum versions
 required_system_dependencies = {"python3": "3.6", "pip3": "20.0"}
-required_python_packages = {"requests": "2.22.0"}
+required_python_packages = {"requests": "2.22.0", "packaging": "20.0", "tqdm": "4.0.0"}
 
 # Set up logging
 logging.basicConfig(
@@ -30,7 +30,7 @@ def check_system_dependencies():
             missing_dependencies.append(dep)
         else:
             version_result = subprocess.run([dep, "--version"], capture_output=True, text=True)
-            installed_version = version_result.stdout.split()[-1]
+            installed_version = version_result.stdout.split()[-1].strip(')').strip('(').strip(',')
             if version.parse(installed_version) < version.parse(min_version):
                 missing_dependencies.append(dep)
     return missing_dependencies
@@ -66,10 +66,18 @@ def install_system_dependencies(missing_dependencies):
         logging.error("Unsupported package manager. Please install the required dependencies manually.")
         return False
     
-    install_command = f"{package_managers[detected_package_manager]} {' '.join(missing_dependencies)}"
+    install_commands = []
+    if "pip3" in missing_dependencies and detected_package_manager in ["yum", "dnf"]:
+        missing_dependencies.remove("pip3")
+        install_commands.append(f"{package_managers[detected_package_manager]} python3-pip")
+    
+    if missing_dependencies:
+        install_commands.append(f"{package_managers[detected_package_manager]} {' '.join(missing_dependencies)}")
+
     try:
         with tqdm(total=100, desc="Installing system dependencies") as pbar:
-            subprocess.run(install_command, shell=True, check=True)
+            for command in install_commands:
+                subprocess.run(command, shell=True, check=True)
             pbar.update(100)
         logging.info("System dependencies installed successfully.")
         return True
