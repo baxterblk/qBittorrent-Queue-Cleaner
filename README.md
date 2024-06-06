@@ -9,14 +9,6 @@ The `master_script` is the recommended option. It includes comprehensive functio
 ## Scripts
 
 - **master_script**: The main script that handles all supported applications.
-- **lidarr_only**: Script for cleaning stalled downloads in Lidarr only.
-- **radarr_only**: Script for cleaning stalled downloads in Radarr only.
-- **sonarr_only**: Script for cleaning stalled downloads in Sonarr only.
-- **readarr_only**: Script for cleaning stalled downloads in Readarr only.
-- **prowlarr_only**: Script for cleaning stalled downloads in Prowlarr only.
-- **whisparr_only**: Script for cleaning stalled downloads in Whisparr only.
-- **lidarr_readarr**: Script for cleaning stalled downloads in both Lidarr and Readarr.
-- **sonarr_radarr_lidarr_readarr**: Script for cleaning stalled downloads in Sonarr, Radarr, Lidarr, and Readarr.
 
 ## Usage
 
